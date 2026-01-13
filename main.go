@@ -19,8 +19,8 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:         "HyLauncher",
-		Width:         960,
-		Height:        540,
+		Width:         1280,
+		Height:        720,
 		DisableResize: true,
 		Frameless:     true,
 		AssetServer: &assetserver.Options{
