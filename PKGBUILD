@@ -1,17 +1,17 @@
 # Maintainer: Terromur <terromuroz@proton.me>
 pkgname=HyLauncher
-pkgver=0.6.3
-_pkgver=v0.6.3
-pkgrel=2
+pkgver=0.6.5
+_pkgver=v0.6.5
+pkgrel=1
 pkgdesc="HyLauncher - unofficial Hytale Launcher for free to play gamers"
 arch=('x86_64')
 url="https://github.com/ArchDevs/HyLauncher"
-license=('custom')
+license=('GPL3')
 depends=('webkit2gtk' 'gtk3')
 makedepends=('go' 'nodejs' 'npm')
 source=("$url/archive/refs/tags/$_pkgver.tar.gz")
 sha256sums=(
-'72680b088b58bb900458705e9df2d5aaa963bdcf585a979091d378ea7dc73344')
+'448d70ba7dd1fa2583544c2f987f6d94ad31bd1b4ea02942b281c9f96f69ea0c')
 
 prepare() {
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
@@ -30,4 +30,6 @@ package() {
   install -Dm644 "$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
 
   install -Dm644 "$pkgname.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+  
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
