@@ -4,7 +4,7 @@ package app
 
 import (
 	"HyLauncher/internal/env"
-	"HyLauncher/internal/pwr"
+	"HyLauncher/internal/patch"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,8 +97,8 @@ func checkConnectivity() ConnectivityInfo {
 
 	start := time.Now()
 
-	errGame := pwr.TestConnection(gameServersURL)
-	errItchio := pwr.TestConnection(itchioServersURL)
+	errGame := patch.TestConnection(gameServersURL)
+	errItchio := patch.TestConnection(itchioServersURL)
 
 	info.ResponseTime = time.Since(start).Milliseconds()
 
@@ -124,7 +124,7 @@ func checkConnectivity() ConnectivityInfo {
 func checkLocalInstallation() InstallationInfo {
 	info := InstallationInfo{
 		InstallPath:    env.GetDefaultAppDir(),
-		CurrentVersion: pwr.GetLocalVersion(),
+		CurrentVersion: patch.GetLocalVersion(),
 	}
 
 	// Check if game is installed
@@ -159,7 +159,7 @@ func checkLocalInstallation() InstallationInfo {
 func checkServerVersions() ServerVersionInfo {
 	info := ServerVersionInfo{}
 
-	result := pwr.FindLatestVersionWithDetails("release")
+	result := patch.FindLatestVersionWithDetails("release")
 
 	info.LatestVersion = result.LatestVersion
 	info.FoundVersions = result.LatestVersion > 0

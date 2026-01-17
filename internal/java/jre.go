@@ -11,9 +11,8 @@ import (
 	"time"
 
 	"HyLauncher/internal/env"
-	"HyLauncher/internal/models/hyerrors"
-	"HyLauncher/internal/util"
-	"HyLauncher/internal/util/download"
+	"HyLauncher/pkg/download"
+	"HyLauncher/pkg/fileutil"
 )
 
 type JREPlatform struct {
@@ -88,7 +87,7 @@ func DownloadJRE(ctx context.Context, progressCallback func(stage string, progre
 	if progressCallback != nil {
 		progressCallback("jre", 92, "Verifying JRE integrity...", fileName, "", 0, 0)
 	}
-	if err := util.VerifySHA256(cacheFile, platform.SHA256); err != nil {
+	if err := fileutil.VerifySHA256(cacheFile, platform.SHA256); err != nil {
 		_ = os.Remove(cacheFile)
 		return err
 	}
@@ -153,11 +152,11 @@ func GetJavaExec() (string, error) {
 
 	if _, err := os.Stat(javaBin); os.IsNotExist(err) {
 		fmt.Println("Warning: JRE not found, fallback to system java")
-		return "", hyerrors.ErrJavaNotFound
+		return "", fmt.Errorf("java not found")
 	}
 
 	if ok := isJavaFunctional(javaBin); ok == false {
-		return "", hyerrors.ErrJavaBroken
+		return "", fmt.Errorf("java broken")
 	}
 
 	return javaBin, nil

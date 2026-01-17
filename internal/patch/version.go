@@ -1,4 +1,4 @@
-package pwr
+package patch
 
 import (
 	"HyLauncher/internal/env"

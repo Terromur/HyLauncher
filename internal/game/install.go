@@ -11,7 +11,7 @@ import (
 
 	"HyLauncher/internal/env"
 	"HyLauncher/internal/java"
-	"HyLauncher/internal/pwr"
+	"HyLauncher/internal/patch"
 )
 
 var (
@@ -41,7 +41,7 @@ func EnsureInstalled(ctx context.Context, progress func(stage string, progress f
 	}
 
 	// Install Butler
-	if _, err := pwr.InstallButler(ctx, progress); err != nil {
+	if _, err := patch.InstallButler(ctx, progress); err != nil {
 		return fmt.Errorf("failed to install Butler tool: %w", err)
 	}
 
@@ -51,7 +51,7 @@ func EnsureInstalled(ctx context.Context, progress func(stage string, progress f
 	}
 
 	// Run version check (will use cache if available)
-	result := pwr.FindLatestVersionWithDetails("release")
+	result := patch.FindLatestVersionWithDetails("release")
 
 	if result.Error != nil {
 		return fmt.Errorf(
@@ -99,7 +99,7 @@ func EnsureInstalled(ctx context.Context, progress func(stage string, progress f
 }
 
 func InstallGame(ctx context.Context, versionType string, remoteVer int, progressCallback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64)) error {
-	localStr := pwr.GetLocalVersion()
+	localStr := patch.GetLocalVersion()
 	local, _ := strconv.Atoi(localStr)
 
 	gameLatestDir := filepath.Join(env.GetDefaultAppDir(), "release", "package", "game", "latest")
@@ -131,7 +131,7 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	}
 
 	// Download the patch file
-	pwrPath, err := pwr.DownloadPWR(ctx, versionType, prevVer, remoteVer, progressCallback)
+	pwrPath, err := patch.DownloadPWR(ctx, versionType, prevVer, remoteVer, progressCallback)
 	if err != nil {
 		return fmt.Errorf("failed to download game patch: %w", err)
 	}
@@ -148,7 +148,7 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 		progressCallback("install", 0, "Applying game patch...", "", "", 0, 0)
 	}
 
-	if err := pwr.ApplyPWR(ctx, pwrPath, progressCallback); err != nil {
+	if err := patch.ApplyPWR(ctx, pwrPath, progressCallback); err != nil {
 		return fmt.Errorf("failed to apply game patch: %w", err)
 	}
 
@@ -158,7 +158,7 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	}
 
 	// Save the new version
-	if err := pwr.SaveLocalVersion(remoteVer); err != nil {
+	if err := patch.SaveLocalVersion(remoteVer); err != nil {
 		fmt.Printf("Warning: failed to save version info: %v\n", err)
 	}
 

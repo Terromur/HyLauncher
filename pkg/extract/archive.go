@@ -1,4 +1,4 @@
-package util
+package extract
 
 import (
 	"archive/tar"

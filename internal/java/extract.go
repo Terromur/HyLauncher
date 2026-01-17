@@ -1,7 +1,7 @@
 package java
 
 import (
-	"HyLauncher/internal/util"
+	"HyLauncher/pkg/extract"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,10 +16,10 @@ func extractJRE(archivePath, destDir string) error {
 
 	switch {
 	case strings.HasSuffix(archivePath, ".zip"):
-		return util.ExtractZip(archivePath, destDir)
+		return extract.ExtractZip(archivePath, destDir)
 
 	case strings.HasSuffix(archivePath, ".tar.gz"):
-		return util.ExtractTarGz(archivePath, destDir)
+		return extract.ExtractTarGz(archivePath, destDir)
 
 	default:
 		return fmt.Errorf("unsupported archive format: %s", archivePath)

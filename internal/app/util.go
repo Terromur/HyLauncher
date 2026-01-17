@@ -2,6 +2,7 @@ package app
 
 import (
 	"HyLauncher/internal/env"
+	"HyLauncher/pkg/hyerrors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,7 @@ func (a *App) OpenFolder() error {
 	// Verify folder exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.MkdirAll(path, 0755); err != nil {
-			return FileSystemError("creating game folder", err)
+			return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "creating game folder", err)
 		}
 	}
 
@@ -30,7 +31,7 @@ func (a *App) OpenFolder() error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return FileSystemError("opening folder", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "opening folder", err)
 	}
 
 	return nil
@@ -41,7 +42,7 @@ func (a *App) DeleteGame() error {
 
 	entries, err := os.ReadDir(homeDir)
 	if err != nil {
-		return FileSystemError("reading game directory", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "reading game directory", err)
 	}
 
 	// Track deletion errors
@@ -57,7 +58,8 @@ func (a *App) DeleteGame() error {
 	}
 
 	if len(deleteErrors) > 0 {
-		return GameError(
+		return hyerrors.NewAppError(
+			hyerrors.ErrorTypeFileSystem,
 			fmt.Sprintf("Failed to delete some folders: %v", deleteErrors),
 			nil,
 		)
@@ -65,7 +67,7 @@ func (a *App) DeleteGame() error {
 
 	// Recreate folder structure
 	if err := env.CreateFolders(); err != nil {
-		return FileSystemError("recreating folder structure", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "recreating folder structure", err)
 	}
 
 	return nil

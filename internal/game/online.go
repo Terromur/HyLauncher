@@ -2,8 +2,9 @@ package game
 
 import (
 	"HyLauncher/internal/env"
-	"HyLauncher/internal/util"
-	"HyLauncher/internal/util/download"
+	"HyLauncher/pkg/download"
+	"HyLauncher/pkg/extract"
+	"HyLauncher/pkg/fileutil"
 	"context"
 	"fmt"
 	"os"
@@ -71,7 +72,7 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	defer os.RemoveAll(tempDir)
 
 	// Extract zip
-	if err := util.ExtractZip(zipPath, tempDir); err != nil {
+	if err := extract.ExtractZip(zipPath, tempDir); err != nil {
 		return fmt.Errorf("failed to extract ZIP: %w", err)
 	}
 
@@ -82,7 +83,7 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	if err := os.MkdirAll(filepath.Dir(clientDst), 0755); err != nil {
 		return fmt.Errorf("failed to create client directory: %w", err)
 	}
-	if err := util.CopyFile(clientSrc, clientDst); err != nil {
+	if err := fileutil.CopyFile(clientSrc, clientDst); err != nil {
 		return fmt.Errorf("failed to copy client executable: %w", err)
 	}
 
@@ -95,14 +96,14 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	// Copy HytaleServer.jar (replace existing)
 	serverJarSrc := filepath.Join(tempDir, "Server", "HytaleServer.jar")
 	serverJarDst := filepath.Join(serverDir, "HytaleServer.jar")
-	if err := util.CopyFile(serverJarSrc, serverJarDst); err != nil {
+	if err := fileutil.CopyFile(serverJarSrc, serverJarDst); err != nil {
 		return fmt.Errorf("failed to copy HytaleServer.jar: %w", err)
 	}
 
 	// Copy start-server.bat (add new file)
 	startBatSrc := filepath.Join(tempDir, "Server", "start-server.bat")
 	startBatDst := filepath.Join(serverDir, "start-server.bat")
-	if err := util.CopyFile(startBatSrc, startBatDst); err != nil {
+	if err := fileutil.CopyFile(startBatSrc, startBatDst); err != nil {
 		return fmt.Errorf("failed to copy start-server.bat: %w", err)
 	}
 

@@ -10,7 +10,8 @@ import (
 	"HyLauncher/internal/config"
 	"HyLauncher/internal/env"
 	"HyLauncher/internal/game"
-	"HyLauncher/internal/pwr"
+	"HyLauncher/internal/patch"
+	"HyLauncher/pkg/hyerrors"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -49,7 +50,7 @@ func (a *App) Startup(ctx context.Context) {
 
 	go func() {
 		fmt.Println("Starting cleanup")
-		env.CleanupIncompleteDownloads()
+		env.CleanupLauncher()
 	}()
 }
 
@@ -67,38 +68,46 @@ func (a *App) progressCallback(stage string, progress float64, message string, c
 
 // emitError sends structured errors to frontend
 func (a *App) emitError(err error) {
-	if appErr, ok := err.(*AppError); ok {
+	if appErr, ok := err.(*hyerrors.AppError); ok {
 		runtime.EventsEmit(a.ctx, "error", appErr)
 	} else {
-		runtime.EventsEmit(a.ctx, "error", NewAppError(ErrorTypeUnknown, err.Error(), err))
+		runtime.EventsEmit(a.ctx, "error", hyerrors.NewAppError(hyerrors.ErrorTypeUnknown, err.Error(), err))
 	}
 }
 
 var AppVersion string = config.Default().Version
 
 func (a *App) GetVersions() (currentVersion string, latestVersion string) {
-	current := pwr.GetLocalVersion()
-	latest := pwr.FindLatestVersion("release")
+	current := patch.GetLocalVersion()
+	latest := patch.FindLatestVersion("release")
 	return current, strconv.Itoa(latest)
 }
 
 func (a *App) DownloadAndLaunch(playerName string) error {
 	// Validate nickname
 	if len(playerName) == 0 {
-		err := ValidationError("Please enter a nickname")
+		err := hyerrors.NewAppError(
+			hyerrors.ErrorTypeValidation,
+			"Please enter a nickname",
+			nil,
+		)
 		a.emitError(err)
 		return err
 	}
 
 	if len(playerName) > 16 {
-		err := ValidationError("Nickname is too long (max 16 characters)")
+		err := hyerrors.NewAppError(
+			hyerrors.ErrorTypeValidation,
+			"Nickname is too long (max 16 characters)",
+			nil,
+		)
 		a.emitError(err)
 		return err
 	}
 
 	// Ensure game is installed
 	if err := game.EnsureInstalled(a.ctx, a.progressCallback); err != nil {
-		wrappedErr := GameError("Failed to install or update game", err)
+		wrappedErr := hyerrors.NewAppError(hyerrors.ErrorTypeGame, "Failed to install or update game", err)
 		a.emitError(wrappedErr)
 		return wrappedErr
 	}
@@ -107,7 +116,7 @@ func (a *App) DownloadAndLaunch(playerName string) error {
 	a.progressCallback("launch", 100, "Launching game...", "", "", 0, 0)
 
 	if err := game.Launch(playerName, "latest"); err != nil {
-		wrappedErr := GameError("Failed to launch game", err)
+		wrappedErr := hyerrors.NewAppError(hyerrors.ErrorTypeGame, "Failed to launch game", err)
 		a.emitError(wrappedErr)
 		return wrappedErr
 	}
