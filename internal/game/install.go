@@ -11,7 +11,8 @@ import (
 
 	"HyLauncher/internal/env"
 	"HyLauncher/internal/java"
-	"HyLauncher/internal/pwr"
+	"HyLauncher/internal/patch"
+	"HyLauncher/internal/progress"
 )
 
 var (
@@ -19,7 +20,7 @@ var (
 	isInstalling bool
 )
 
-func EnsureInstalled(ctx context.Context, progress func(stage string, progress float64, msg string, file string, speed string, down, total int64)) error {
+func EnsureInstalled(ctx context.Context, reporter *progress.Reporter) error {
 	// Prevent multiple simultaneous installations
 	installMutex.Lock()
 	if isInstalling {
@@ -36,22 +37,23 @@ func EnsureInstalled(ctx context.Context, progress func(stage string, progress f
 	}()
 
 	// Download JRE
-	if err := java.DownloadJRE(ctx, progress); err != nil {
+	if err := java.DownloadJRE(ctx, reporter); err != nil {
 		return fmt.Errorf("failed to download Java Runtime: %w", err)
 	}
 
 	// Install Butler
-	if _, err := pwr.InstallButler(ctx, progress); err != nil {
+	if _, err := patch.InstallButler(ctx, reporter); err != nil {
 		return fmt.Errorf("failed to install Butler tool: %w", err)
 	}
 
 	// Find latest version with details
-	if progress != nil {
-		progress("version", 0, "Checking for game updates...", "", "", 0, 0)
+	if reporter != nil {
+		reporter.Report(progress.StageVerify, 0, "Checking for game updates")
 	}
 
+	// TODO run find LatestVersionWithDetails in new goroutine
 	// Run version check (will use cache if available)
-	result := pwr.FindLatestVersionWithDetails("release")
+	result := patch.FindLatestVersionWithDetails("release")
 
 	if result.Error != nil {
 		return fmt.Errorf(
@@ -88,22 +90,24 @@ func EnsureInstalled(ctx context.Context, progress func(stage string, progress f
 		)
 	}
 
-	if progress != nil {
-		progress("version", 100, fmt.Sprintf("Found version %d", result.LatestVersion), "", "", 0, 0)
+	if reporter != nil {
+		reporter.Report(progress.StageVerify, 100, "Checking complete")
+		reporter.Report(progress.StageComplete, 0, fmt.Sprintf("Found version %d", result.LatestVersion))
 	}
 
 	fmt.Printf("Found latest version: %d\n", result.LatestVersion)
 	fmt.Printf("Success URL: %s\n", result.SuccessURL)
 
-	return InstallGame(ctx, "release", result.LatestVersion, progress)
+	return InstallGame(ctx, "release", result.LatestVersion, reporter)
 }
 
-func InstallGame(ctx context.Context, versionType string, remoteVer int, progressCallback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64)) error {
-	localStr := pwr.GetLocalVersion()
+func InstallGame(ctx context.Context, versionType string, remoteVer int, reporter *progress.Reporter) error {
+	localStr := patch.GetLocalVersion()
 	local, _ := strconv.Atoi(localStr)
 
 	gameLatestDir := filepath.Join(env.GetDefaultAppDir(), "release", "package", "game", "latest")
 
+	// Adjust game client executale to operating system
 	gameClient := "HytaleClient"
 	if runtime.GOOS == "windows" {
 		gameClient += ".exe"
@@ -111,9 +115,10 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	clientPath := filepath.Join(gameLatestDir, "Client", gameClient)
 	_, clientErr := os.Stat(clientPath)
 
+	// Check if our game version is same as latest
 	if local == remoteVer && clientErr == nil {
-		if progressCallback != nil {
-			progressCallback("complete", 100, "Game is up to date", "", "", 0, 0)
+		if reporter != nil {
+			reporter.Report(progress.StageComplete, 100, "Game is up to date")
 		}
 		return nil
 	}
@@ -121,17 +126,17 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	prevVer := local
 	if clientErr != nil {
 		prevVer = 0
-		if progressCallback != nil {
-			progressCallback("download", 0, fmt.Sprintf("Installing game version %d...", remoteVer), "", "", 0, 0)
+		if reporter != nil {
+			reporter.Report(progress.StagePWR, 0, fmt.Sprintf("Installing game version %d...", remoteVer))
 		}
 	} else {
-		if progressCallback != nil {
-			progressCallback("download", 0, fmt.Sprintf("Updating from version %d to %d...", local, remoteVer), "", "", 0, 0)
+		if reporter != nil {
+			reporter.Report(progress.StagePWR, 0, fmt.Sprintf("Updating from version %d to %d...", local, remoteVer))
 		}
 	}
 
 	// Download the patch file
-	pwrPath, err := pwr.DownloadPWR(ctx, versionType, prevVer, remoteVer, progressCallback)
+	pwrPath, err := patch.DownloadPWR(ctx, versionType, prevVer, remoteVer, reporter)
 	if err != nil {
 		return fmt.Errorf("failed to download game patch: %w", err)
 	}
@@ -144,11 +149,11 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	fmt.Printf("Patch file size: %d bytes\n", info.Size())
 
 	// Apply the patch
-	if progressCallback != nil {
-		progressCallback("install", 0, "Applying game patch...", "", "", 0, 0)
+	if reporter != nil {
+		reporter.Report(progress.StagePatch, 0, "Applying game patch...")
 	}
 
-	if err := pwr.ApplyPWR(ctx, pwrPath, progressCallback); err != nil {
+	if err := patch.ApplyPWR(ctx, pwrPath, reporter); err != nil {
 		return fmt.Errorf("failed to apply game patch: %w", err)
 	}
 
@@ -158,27 +163,27 @@ func InstallGame(ctx context.Context, versionType string, remoteVer int, progres
 	}
 
 	// Save the new version
-	if err := pwr.SaveLocalVersion(remoteVer); err != nil {
+	if err := patch.SaveLocalVersion(remoteVer); err != nil {
 		fmt.Printf("Warning: failed to save version info: %v\n", err)
 	}
 
 	// Apply online fix only on windows
 	if runtime.GOOS == "windows" {
-		if progressCallback != nil {
-			progressCallback("online-fix", 0, "Applying online fix...", "", "", 0, 0)
+		if reporter != nil {
+			reporter.Report(progress.StageOnlineFix, 0, "Applying online fix...")
 		}
 
-		if err := ApplyOnlineFixWindows(ctx, gameLatestDir, progressCallback); err != nil {
+		if err := ApplyOnlineFixWindows(ctx, gameLatestDir, reporter); err != nil {
 			return fmt.Errorf("failed to apply online fix: %w", err)
 		}
 
-		if progressCallback != nil {
-			progressCallback("online-fix", 100, "Online fix applied", "", "", 0, 0)
+		if reporter != nil {
+			reporter.Report(progress.StageOnlineFix, 100, "Online fix applied")
 		}
 	}
 
-	if progressCallback != nil {
-		progressCallback("complete", 100, "Game installed successfully", "", "", 0, 0)
+	if reporter != nil {
+		reporter.Report(progress.StageComplete, 100, "Game installed successfully")
 	}
 
 	return nil

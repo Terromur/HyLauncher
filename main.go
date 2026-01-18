@@ -1,7 +1,7 @@
 package main
 
 import (
-	"HyLauncher/app"
+	"HyLauncher/internal/app"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-func CleanupIncompleteDownloads() error {
+func CleanupLauncher() error {
 	appDir := GetDefaultAppDir()
 	cacheDir := filepath.Join(appDir, "cache")
 

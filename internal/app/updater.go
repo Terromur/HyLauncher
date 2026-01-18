@@ -1,8 +1,11 @@
 package app
 
 import (
-	"HyLauncher/internal/util"
-	"HyLauncher/updater"
+	"HyLauncher/internal/platform"
+	"HyLauncher/internal/progress"
+	"HyLauncher/internal/updater"
+	"HyLauncher/pkg/fileutil"
+	"HyLauncher/pkg/hyerrors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,7 +38,7 @@ func (a *App) Update() error {
 	asset, newVersion, err := updater.CheckUpdate(a.ctx, AppVersion)
 	if err != nil {
 		fmt.Printf("Update check failed: %v\n", err)
-		return WrapError(ErrorTypeNetwork, "Failed to check for updates", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeNetwork, "Failed to check for updates", err)
 	}
 
 	if asset == nil {
@@ -45,23 +48,24 @@ func (a *App) Update() error {
 
 	fmt.Printf("Downloading update from: %s\n", asset.URL)
 
-	tmp, err := updater.DownloadUpdate(a.ctx, asset.URL, func(stage string, progress float64, message string, currentFile string, speed string, downloaded int64, total int64) {
-		fmt.Printf("[%s] %s: %.1f%% (%d/%d bytes) at %s\n", stage, message, progress, downloaded, total, speed)
-		runtime.EventsEmit(a.ctx, "update:progress", stage, progress, message, currentFile, speed, downloaded, total)
-	})
+	// Create progress reporter
+	reporter := progress.New(a.ctx)
 
+	tmp, err := updater.DownloadTemp(a.ctx, asset.URL, reporter)
 	if err != nil {
 		fmt.Printf("Download failed: %v\n", err)
-		return NetworkError("downloading launcher update", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeNetwork, "downloading launcher update", err)
 	}
 
 	// Verify checksum if provided
 	if asset.Sha256 != "" {
 		fmt.Println("Verifying download checksum...")
-		if err := util.VerifySHA256(tmp, asset.Sha256); err != nil {
+		reporter.Report(progress.StageUpdate, 100, "Verifying checksum...")
+
+		if err := fileutil.VerifySHA256(tmp, asset.Sha256); err != nil {
 			fmt.Printf("Verification failed: %v\n", err)
 			os.Remove(tmp)
-			return WrapError(ErrorTypeValidation, "Update file verification failed", err)
+			return hyerrors.NewAppError(hyerrors.ErrorTypeValidation, "Update file verification failed", err)
 		}
 		fmt.Println("Checksum verified successfully")
 	} else {
@@ -72,24 +76,24 @@ func (a *App) Update() error {
 	helperPath, err := updater.EnsureUpdateHelper(a.ctx)
 	if err != nil {
 		fmt.Printf("Failed to prepare update helper: %v\n", err)
-		return FileSystemError("preparing updater", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "preparing updater", err)
 	}
 
 	fmt.Printf("Running update helper: %s\n", helperPath)
 	exe, err := os.Executable()
 	if err != nil {
-		return FileSystemError("getting executable path", err)
+		return hyerrors.NewAppError(hyerrors.ErrorTypeFileSystem, "getting executable path", err)
 	}
 
-	// IMPORTANT: Call the helper, not the launcher itself!
+	// Call the helper
 	cmd := exec.Command(
-		helperPath, // <- Fixed: was 'exe' before
-		exe,        // old executable (launcher)
-		tmp,        // new executable (downloaded update)
+		helperPath,
+		exe, // old executable (launcher)
+		tmp, // new executable (downloaded update)
 	)
 
 	// Detach the helper process properly on Windows
-	util.HideConsoleWindow(cmd)
+	platform.HideConsoleWindow(cmd)
 
 	// Don't inherit file handles
 	cmd.Stdin = nil

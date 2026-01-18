@@ -1,7 +1,7 @@
 package updater
 
 import (
-	"HyLauncher/internal/util"
+	"HyLauncher/pkg/fileutil"
 	"context"
 	"fmt"
 	"io"
@@ -11,7 +11,6 @@ import (
 )
 
 // Installs UpdateHelper
-// TODO need to be update function name to: InstallUpdateHelper
 func EnsureUpdateHelper(ctx context.Context) (string, error) {
 	// Get path name for the executable that started the current process
 	exe, err := os.Executable()
@@ -41,11 +40,9 @@ func EnsureUpdateHelper(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get helper asset info: %w", err)
 	}
-	
+
 	// Download latest update-helper, returned file path to temp file of helper
-	// !! Possible misunderstanding !! DownloadUpdate downloads any file, right now
-	// it downloads update-helper, as hylauncher-update-*.tmp file. 
-	tmp, err := DownloadUpdate(ctx, asset.URL, nil)
+	tmp, err := DownloadTemp(ctx, asset.URL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to download helper: %w", err)
 	}
@@ -53,7 +50,7 @@ func EnsureUpdateHelper(ctx context.Context) (string, error) {
 
 	// Verify checksum if provided
 	if asset.Sha256 != "" {
-		if err := util.VerifySHA256(tmp, asset.Sha256); err != nil {
+		if err := fileutil.VerifySHA256(tmp, asset.Sha256); err != nil {
 			return "", fmt.Errorf("helper verification failed: %w", err)
 		}
 		fmt.Println("Helper verification successful")

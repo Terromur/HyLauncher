@@ -2,8 +2,10 @@ package game
 
 import (
 	"HyLauncher/internal/env"
-	"HyLauncher/internal/util"
-	"HyLauncher/internal/util/download"
+	"HyLauncher/internal/progress"
+	"HyLauncher/pkg/download"
+	"HyLauncher/pkg/extract"
+	"HyLauncher/pkg/fileutil"
 	"context"
 	"fmt"
 	"os"
@@ -12,12 +14,10 @@ import (
 )
 
 const (
-	onlineFixAssetName     = "online-fix.zip"
-	progressWeightDownload = 0.7
-	progressWeightExtract  = 0.3
+	onlineFixAssetName = "online-fix.zip"
 )
 
-func ApplyOnlineFixWindows(ctx context.Context, gameDir string, progressCallback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64)) error {
+func ApplyOnlineFixWindows(ctx context.Context, gameDir string, reporter *progress.Reporter) error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("online fix is only for Windows")
 	}
@@ -30,19 +30,19 @@ func ApplyOnlineFixWindows(ctx context.Context, gameDir string, progressCallback
 	zipPath := filepath.Join(cacheDir, onlineFixAssetName)
 
 	// Download from GitHub releases
-	if progressCallback != nil {
-		progressCallback("online-fix", 0, "Downloading online-fix from GitHub...", onlineFixAssetName, "", 0, 0)
-	}
+	reporter.Report(progress.StageOnlineFix, 0, "Downloading online-fix...")
 
-	if err := download.DownloadLatestReleaseAsset(ctx, onlineFixAssetName, zipPath, wrapProgressCallback(progressCallback, progressWeightDownload)); err != nil {
+	scaler := progress.NewScaler(reporter, progress.StageOnlineFix, 0, 70)
+
+	if err := download.DownloadLatestReleaseAsset(ctx, onlineFixAssetName, zipPath, func(stage string, prog float64, message string, currentFile string, speed string, downloaded, total int64) {
+		scaler.ReportDownload(progress.StageOnlineFix, prog, message, onlineFixAssetName, speed, downloaded, total)
+	}); err != nil {
 		_ = os.Remove(zipPath)
 		return fmt.Errorf("failed to download online-fix: %w", err)
 	}
 
 	// Extract and apply the fix
-	if progressCallback != nil {
-		progressCallback("online-fix", 70, "Extracting archive...", "", "", 0, 0)
-	}
+	reporter.Report(progress.StageOnlineFix, 70, "Extracting online-fix...")
 
 	if err := extractAndApplyFix(zipPath, gameDir, cacheDir); err != nil {
 		return err
@@ -51,9 +51,7 @@ func ApplyOnlineFixWindows(ctx context.Context, gameDir string, progressCallback
 	// Cleanup
 	_ = os.Remove(zipPath)
 
-	if progressCallback != nil {
-		progressCallback("online-fix", 100, "Online fix applied successfully", "", "", 0, 0)
-	}
+	reporter.Report(progress.StageOnlineFix, 100, "Online-fix applied successfully")
 
 	return nil
 }
@@ -71,7 +69,7 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	defer os.RemoveAll(tempDir)
 
 	// Extract zip
-	if err := util.ExtractZip(zipPath, tempDir); err != nil {
+	if err := extract.ExtractZip(zipPath, tempDir); err != nil {
 		return fmt.Errorf("failed to extract ZIP: %w", err)
 	}
 
@@ -82,7 +80,7 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	if err := os.MkdirAll(filepath.Dir(clientDst), 0755); err != nil {
 		return fmt.Errorf("failed to create client directory: %w", err)
 	}
-	if err := util.CopyFile(clientSrc, clientDst); err != nil {
+	if err := fileutil.CopyFile(clientSrc, clientDst); err != nil {
 		return fmt.Errorf("failed to copy client executable: %w", err)
 	}
 
@@ -95,30 +93,21 @@ func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
 	// Copy HytaleServer.jar (replace existing)
 	serverJarSrc := filepath.Join(tempDir, "Server", "HytaleServer.jar")
 	serverJarDst := filepath.Join(serverDir, "HytaleServer.jar")
-	if err := util.CopyFile(serverJarSrc, serverJarDst); err != nil {
+	if err := fileutil.CopyFile(serverJarSrc, serverJarDst); err != nil {
 		return fmt.Errorf("failed to copy HytaleServer.jar: %w", err)
 	}
 
 	// Copy start-server.bat (add new file)
 	startBatSrc := filepath.Join(tempDir, "Server", "start-server.bat")
 	startBatDst := filepath.Join(serverDir, "start-server.bat")
-	if err := util.CopyFile(startBatSrc, startBatDst); err != nil {
+	if err := fileutil.CopyFile(startBatSrc, startBatDst); err != nil {
 		return fmt.Errorf("failed to copy start-server.bat: %w", err)
 	}
 
 	return nil
 }
 
-func wrapProgressCallback(callback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64), weight float64) func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64) {
-	if callback == nil {
-		return nil
-	}
-	return func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64) {
-		callback(stage, progress*weight, message, currentFile, speed, downloaded, total)
-	}
-}
-
-func EnsureServerAndClientFix(ctx context.Context, progressCallback func(stage string, progress float64, message string, currentFile string, speed string, downloaded, total int64)) error {
+func EnsureServerAndClientFix(ctx context.Context, reporter *progress.Reporter) error {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
@@ -133,11 +122,9 @@ func EnsureServerAndClientFix(ctx context.Context, progressCallback func(stage s
 	}
 
 	// Server missing, download and apply online fix
-	if progressCallback != nil {
-		progressCallback("online-fix", 0, "Server missing, downloading online fix...", "", "", 0, 0)
-	}
+	reporter.Report(progress.StageOnlineFix, 0, "Applying online fix for server...")
 
-	if err := ApplyOnlineFixWindows(ctx, gameLatestDir, progressCallback); err != nil {
+	if err := ApplyOnlineFixWindows(ctx, gameLatestDir, reporter); err != nil {
 		return fmt.Errorf("failed to apply online fix: %w", err)
 	}
 

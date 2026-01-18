@@ -1,4 +1,4 @@
-package pwr
+package patch
 
 import (
 	"HyLauncher/internal/env"
@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 )
+
+// TODO FULL REFACTOR
 
 type VersionInfo struct {
 	Version int `json:"version"`
