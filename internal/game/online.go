@@ -1,109 +1,247 @@
 package game
 
 import (
-	"HyLauncher/internal/env"
-	"HyLauncher/internal/progress"
-	"HyLauncher/pkg/archive"
-	"HyLauncher/pkg/download"
-	"HyLauncher/pkg/fileutil"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
+
+	"HyLauncher/internal/env"
+	"HyLauncher/internal/progress"
+	"HyLauncher/pkg/fileutil"
+
+	"github.com/anacrolix/torrent"
+	"github.com/mholt/archives"
 )
 
 const (
-	onlineFixAssetName = "online-fix.zip"
+	metadataURL    = "https://hydralinks.pages.dev/sources/onlinefix.json"
+	fixPassword    = "online-fix.me"
+	torrentTimeout = 30 * time.Minute
+	fixArchiveName = "Hytale_Fix_Repair.rar"
+	fixFolderName  = "Fix Repair"
+	gameIdentifier = "Hytale"
 )
+
+type OnlineFixIndex struct {
+	Name      string     `json:"name"`
+	Downloads []Download `json:"downloads"`
+}
+
+type Download struct {
+	Title      string   `json:"title"`
+	FileSize   string   `json:"fileSize"`
+	UploadDate string   `json:"uploadDate"`
+	URIs       []string `json:"uris"`
+}
 
 func ApplyOnlineFixWindows(ctx context.Context, gameDir string, reporter *progress.Reporter) error {
 	if runtime.GOOS != "windows" {
-		return fmt.Errorf("online fix is only for Windows")
+		return fmt.Errorf("online fix is only supported on Windows")
 	}
 
-	cacheDir := filepath.Join(gameDir, ".cache")
+	cacheDir := filepath.Join(gameDir, ".cache", "onlinefix")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
+	defer os.RemoveAll(cacheDir)
 
-	zipPath := filepath.Join(cacheDir, onlineFixAssetName)
+	reporter.Report(progress.StageOnlineFix, 0, "Fetching metadata...")
 
-	// Download from GitHub releases
-	reporter.Report(progress.StageOnlineFix, 0, "Downloading online-fix...")
-
-	// Create a scaler for the download portion (0-70%)
-	scaler := progress.NewScaler(reporter, progress.StageOnlineFix, 0, 70)
-
-	if err := download.DownloadLatestReleaseAsset(ctx, onlineFixAssetName, zipPath, progress.StageOnlineFix, reporter, scaler); err != nil {
-		_ = os.Remove(zipPath)
-		return fmt.Errorf("failed to download online-fix: %w", err)
+	magnetLink, err := fetchMagnetLink(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch magnet link: %w", err)
 	}
 
-	// Extract and apply the fix
-	reporter.Report(progress.StageOnlineFix, 70, "Extracting online-fix...")
+	reporter.Report(progress.StageOnlineFix, 5, "Starting torrent download...")
 
-	if err := extractAndApplyFix(zipPath, gameDir, cacheDir); err != nil {
-		return err
+	fixArchivePath := filepath.Join(cacheDir, fixArchiveName)
+	if err := downloadFixArchive(ctx, magnetLink, fixArchivePath, reporter); err != nil {
+		return fmt.Errorf("failed to download fix: %w", err)
 	}
 
-	// Cleanup
-	_ = os.Remove(zipPath)
+	reporter.Report(progress.StageOnlineFix, 80, "Extracting fix...")
 
-	reporter.Report(progress.StageOnlineFix, 100, "Online-fix applied successfully")
+	if err := extractAndApply(fixArchivePath, gameDir); err != nil {
+		return fmt.Errorf("failed to extract fix: %w", err)
+	}
 
+	reporter.Report(progress.StageOnlineFix, 100, "Online fix applied")
 	return nil
 }
 
-func extractAndApplyFix(zipPath, gameDir, cacheDir string) error {
-	tempDir := filepath.Join(cacheDir, "temp_extract")
-
-	// Clean and create temp directory
-	if err := os.RemoveAll(tempDir); err != nil {
-		return fmt.Errorf("failed to clean temp directory: %w", err)
-	}
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Extract zip
-	if err := archive.ExtractZip(zipPath, tempDir); err != nil {
-		return fmt.Errorf("failed to extract ZIP: %w", err)
+func fetchMagnetLink(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	if err != nil {
+		return "", err
 	}
 
-	// Copy client executable
-	clientSrc := filepath.Join(tempDir, "Client", "HytaleClient.exe")
-	clientDst := filepath.Join(gameDir, "Client", "HytaleClient.exe")
-
-	if err := os.MkdirAll(filepath.Dir(clientDst), 0755); err != nil {
-		return fmt.Errorf("failed to create client directory: %w", err)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
 	}
-	if err := fileutil.CopyFile(clientSrc, clientDst); err != nil {
-		return fmt.Errorf("failed to copy client executable: %w", err)
-	}
+	defer resp.Body.Close()
 
-	// Copy ONLY specific server files (not the whole folder)
-	serverDir := filepath.Join(gameDir, "Server")
-	if err := os.MkdirAll(serverDir, 0755); err != nil {
-		return fmt.Errorf("failed to create server directory: %w", err)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	// Copy HytaleServer.jar (replace existing)
-	serverJarSrc := filepath.Join(tempDir, "Server", "HytaleServer.jar")
-	serverJarDst := filepath.Join(serverDir, "HytaleServer.jar")
-	if err := fileutil.CopyFile(serverJarSrc, serverJarDst); err != nil {
-		return fmt.Errorf("failed to copy HytaleServer.jar: %w", err)
+	var index OnlineFixIndex
+	if err := json.NewDecoder(resp.Body).Decode(&index); err != nil {
+		return "", err
 	}
 
-	// Copy start-server.bat (add new file)
-	startBatSrc := filepath.Join(tempDir, "Server", "start-server.bat")
-	startBatDst := filepath.Join(serverDir, "start-server.bat")
-	if err := fileutil.CopyFile(startBatSrc, startBatDst); err != nil {
-		return fmt.Errorf("failed to copy start-server.bat: %w", err)
+	for _, download := range index.Downloads {
+		if strings.Contains(download.Title, gameIdentifier) {
+			if len(download.URIs) == 0 {
+				return "", fmt.Errorf("no magnet links found")
+			}
+			return download.URIs[0], nil
+		}
 	}
 
-	return nil
+	return "", fmt.Errorf("Hytale fix not found in metadata")
+}
+
+func downloadFixArchive(ctx context.Context, magnetLink, destPath string, reporter *progress.Reporter) error {
+	cfg := torrent.NewDefaultClientConfig()
+	cfg.DataDir = filepath.Dir(destPath)
+	cfg.NoUpload = true
+	cfg.Seed = false
+
+	client, err := torrent.NewClient(cfg)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	t, err := client.AddMagnet(magnetLink)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Minute):
+		return fmt.Errorf("timeout waiting for torrent metadata")
+	}
+
+	var targetFile *torrent.File
+	for _, file := range t.Files() {
+		if strings.Contains(file.Path(), fixFolderName) && strings.HasSuffix(file.Path(), fixArchiveName) {
+			targetFile = file
+			file.SetPriority(torrent.PiecePriorityNormal)
+		} else {
+			file.SetPriority(torrent.PiecePriorityNone)
+		}
+	}
+
+	if targetFile == nil {
+		return fmt.Errorf("fix archive not found in torrent")
+	}
+
+	t.DownloadAll()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, torrentTimeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("torrent download timeout")
+		case <-ticker.C:
+			stats := t.Stats()
+			totalBytes := targetFile.Length()
+			downloadedBytes := stats.BytesRead.Int64()
+
+			if downloadedBytes >= totalBytes {
+				sourcePath := filepath.Join(cfg.DataDir, targetFile.Path())
+				if err := fileutil.CopyFile(sourcePath, destPath); err != nil {
+					return err
+				}
+				return nil
+			}
+
+			progressPct := 0.0
+			if totalBytes > 0 {
+				progressPct = float64(downloadedBytes) / float64(totalBytes) * 100
+			}
+
+			scaledProgress := 5 + (progressPct * 0.75)
+			reporter.Report(progress.StageOnlineFix, scaledProgress, "Downloading fix...")
+		}
+	}
+}
+
+func extractAndApply(archivePath, gameDir string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	format := archives.Rar{
+		Password: fixPassword,
+	}
+
+	return format.Extract(context.Background(), file, func(ctx context.Context, f archives.FileInfo) error {
+		if f.IsDir() {
+			return nil
+		}
+
+		relPath := f.NameInArchive
+
+		if strings.Contains(relPath, "Client") && strings.HasSuffix(relPath, "HytaleClient.exe") {
+			targetPath := filepath.Join(gameDir, "Client", "HytaleClient.exe")
+			return extractFileFromArchive(f, targetPath)
+		}
+
+		if strings.Contains(relPath, "Server") {
+			if strings.HasSuffix(relPath, "HytaleServer.jar") {
+				targetPath := filepath.Join(gameDir, "Server", "HytaleServer.jar")
+				return extractFileFromArchive(f, targetPath)
+			}
+			if strings.HasSuffix(relPath, "start-server.bat") {
+				targetPath := filepath.Join(gameDir, "Server", "start-server.bat")
+				return extractFileFromArchive(f, targetPath)
+			}
+		}
+
+		return nil
+	})
+}
+
+func extractFileFromArchive(f archives.FileInfo, targetPath string) error {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return err
+	}
+
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	dstFile, err := os.Create(targetPath)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, rc)
+	return err
 }
 
 func EnsureServerAndClientFix(ctx context.Context, branch string, reporter *progress.Reporter) error {
@@ -114,18 +252,14 @@ func EnsureServerAndClientFix(ctx context.Context, branch string, reporter *prog
 	baseDir := env.GetDefaultAppDir()
 	gameLatestDir := filepath.Join(baseDir, branch, "package", "game", "latest")
 
-	// Check if server exists
 	serverBat := filepath.Join(gameLatestDir, "Server", "start-server.bat")
 	if _, err := os.Stat(serverBat); err == nil {
 		return nil
 	}
 
-	// Server missing, download and apply online fix
-	reporter.Report(progress.StageOnlineFix, 0, "Applying online fix for server...")
-
-	if err := ApplyOnlineFixWindows(ctx, gameLatestDir, reporter); err != nil {
-		return fmt.Errorf("failed to apply online fix: %w", err)
+	if reporter != nil {
+		reporter.Report(progress.StageOnlineFix, 0, "Applying online fix...")
 	}
 
-	return nil
+	return ApplyOnlineFixWindows(ctx, gameLatestDir, reporter)
 }
