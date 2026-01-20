@@ -2,12 +2,26 @@ package app
 
 import (
 	"HyLauncher/internal/config"
-	"fmt"
+	"HyLauncher/pkg/hyerrors"
 )
 
 func (a *App) SetNick(nick string) error {
+	if nick == "" {
+		err := hyerrors.Validation("nickname cannot be empty")
+		hyerrors.Report(err)
+		return err
+	}
+
 	a.cfg.Nick = nick
-	return config.Save(a.cfg)
+
+	if err := config.Save(a.cfg); err != nil {
+		appErr := hyerrors.WrapConfig(err, "failed to save nickname").
+			WithContext("nick", nick)
+		hyerrors.Report(appErr)
+		return appErr
+	}
+
+	return nil
 }
 
 func (a *App) GetNick() string {
@@ -19,8 +33,13 @@ func (a *App) GetLauncherVersion() string {
 }
 
 func (a *App) SetLocalGameVersion(version int) error {
-	a.cfg.CurrentGameVersion = version
-	return config.Save(a.cfg)
+	if err := config.SaveLocalGameVersion(version); err != nil {
+		appErr := hyerrors.WrapConfig(err, "failed to save game version").
+			WithContext("version", version)
+		hyerrors.Report(appErr)
+		return appErr
+	}
+	return nil
 }
 
 func (a *App) GetLocalGameVersion() int {
@@ -28,9 +47,11 @@ func (a *App) GetLocalGameVersion() int {
 }
 
 func (a *App) SetBranch(branch string) error {
-	err := config.SaveBranch(branch)
-	if err != nil {
-		return fmt.Errorf("Warning: failed to save branch")
+	if err := config.SaveBranch(branch); err != nil {
+		appErr := hyerrors.WrapConfig(err, "failed to save branch").
+			WithContext("branch", branch)
+		hyerrors.Report(appErr)
+		return appErr
 	}
 	return nil
 }
@@ -38,7 +59,9 @@ func (a *App) SetBranch(branch string) error {
 func (a *App) GetBranch() (string, error) {
 	branch, err := config.GetBranch()
 	if err != nil {
-		return "", fmt.Errorf("Warning: failed to save branch")
+		appErr := hyerrors.WrapConfig(err, "failed to get branch")
+		hyerrors.Report(appErr)
+		return "", appErr
 	}
 	return branch, nil
 }

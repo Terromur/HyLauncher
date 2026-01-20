@@ -6,159 +6,191 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
-	"HyLauncher/internal/env"
 	"HyLauncher/pkg/hyerrors"
 )
 
-// POSSIBLE REFACTOR
-
-// Reporter handles error logging and crash reporting
 type Reporter struct {
-	logDir   string
-	crashDir string
-	version  string
+	rootDir    string
+	appVersion string
+	mu         sync.Mutex
 }
 
-// CrashReport contains all information about a crash
 type CrashReport struct {
-	Timestamp  time.Time          `json:"timestamp"`
-	AppVersion string             `json:"app_version"`
-	OS         string             `json:"os"`
-	Arch       string             `json:"arch"`
-	Error      *hyerrors.AppError `json:"error"`
-	SystemInfo SystemInfo         `json:"system_info"`
-	RecentLogs []string           `json:"recent_logs,omitempty"`
+	ID         string          `json:"id"`
+	Timestamp  time.Time       `json:"timestamp"`
+	AppVersion string          `json:"app_version"`
+	Error      *hyerrors.Error `json:"error"`
+	System     SystemInfo      `json:"system"`
+	Logs       []LogEntry      `json:"recent_logs,omitempty"`
 }
 
-// SystemInfo contains system information
 type SystemInfo struct {
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
 	NumCPU       int    `json:"num_cpu"`
-	GOOS         string `json:"goos"`
-	GOARCH       string `json:"goarch"`
 	GoVersion    string `json:"go_version"`
 	NumGoroutine int    `json:"num_goroutine"`
 }
 
-// NewReporter creates a new diagnostics reporter
-func NewReporter(appVersion string) (*Reporter, error) {
-	appDir := env.GetDefaultAppDir()
-
-	logDir := filepath.Join(appDir, "logs")
-	crashDir := filepath.Join(appDir, "crashes")
-
-	// Create directories
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create log directory: %w", err)
-	}
-	if err := os.MkdirAll(crashDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create crash directory: %w", err)
-	}
-
-	reporter := &Reporter{
-		logDir:   logDir,
-		crashDir: crashDir,
-		version:  appVersion,
-	}
-
-	// Register this reporter as the global error handler
-	hyerrors.SetHandler(reporter)
-
-	// Clean up old crash reports on startup
-	go reporter.ClearOldCrashReports()
-
-	return reporter, nil
+type LogEntry struct {
+	Timestamp time.Time         `json:"timestamp"`
+	Severity  hyerrors.Severity `json:"severity"`
+	Category  hyerrors.Category `json:"category"`
+	Message   string            `json:"message"`
+	Details   string            `json:"details,omitempty"`
 }
 
-// HandleError implements hyerrors.ErrorHandler interface
-// This is called automatically whenever hyerrors.NewAppError() is called
-func (r *Reporter) HandleError(err *hyerrors.AppError) {
-	// Log to file
+func NewReporter(rootDir, appVersion string) (*Reporter, error) {
+	r := &Reporter{
+		rootDir:    rootDir,
+		appVersion: appVersion,
+	}
+
+	if err := r.ensureDirs(); err != nil {
+		return nil, err
+	}
+
+	hyerrors.RegisterHandlerFunc(r.handleError)
+
+	go r.cleanupOldReports(30 * 24 * time.Hour)
+
+	return r, nil
+}
+
+func (r *Reporter) ensureDirs() error {
+	dirs := []string{
+		r.logsDir(),
+		r.crashesDir(),
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create dir %s: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *Reporter) logsDir() string {
+	return filepath.Join(r.rootDir, "logs")
+}
+
+func (r *Reporter) crashesDir() string {
+	return filepath.Join(r.rootDir, "crashes")
+}
+
+func (r *Reporter) handleError(err *hyerrors.Error) {
 	r.logError(err)
 
-	// Save crash report for critical errors
 	if err.IsCritical() {
-		_ = r.saveCrashReport(err)
+		r.saveCrashReport(err)
 	}
 }
 
-// logError writes errors to a log file
-func (r *Reporter) logError(err *hyerrors.AppError) {
-	logFile := filepath.Join(r.logDir, "errors.log")
-	f, fileErr := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func (r *Reporter) logError(err *hyerrors.Error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	logPath := filepath.Join(r.logsDir(), "errors.log")
+	f, fileErr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if fileErr != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", fileErr)
+		fmt.Fprintf(os.Stderr, "failed to open log: %v\n", fileErr)
 		return
 	}
 	defer f.Close()
 
-	logEntry := fmt.Sprintf(
-		"[%s] [%s] %s\nTechnical: %s\nStack:\n%s\n---\n",
+	entry := fmt.Sprintf("[%s] [%s] [%s] %s\n",
 		err.Timestamp.Format("2006-01-02 15:04:05"),
-		err.Type,
-		err.Message,
-		err.Technical,
-		err.Stack,
+		severityString(err.Severity),
+		err.Category,
+		err.Error(),
 	)
 
-	if _, err := f.WriteString(logEntry); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write to log file: %v\n", err)
+	if err.Details != "" {
+		entry += fmt.Sprintf("  Details: %s\n", err.Details)
 	}
+
+	if len(err.Stack) > 0 {
+		entry += "  Stack:\n"
+		for _, frame := range err.Stack {
+			entry += fmt.Sprintf("    %s:%d %s\n", frame.File, frame.Line, frame.Function)
+		}
+	}
+
+	entry += "---\n"
+
+	f.WriteString(entry)
 }
 
-// saveCrashReport saves a crash report to disk
-func (r *Reporter) saveCrashReport(err *hyerrors.AppError) error {
+func (r *Reporter) saveCrashReport(err *hyerrors.Error) {
 	report := CrashReport{
+		ID:         err.ID,
 		Timestamp:  time.Now(),
-		AppVersion: r.version,
-		OS:         runtime.GOOS,
-		Arch:       runtime.GOARCH,
+		AppVersion: r.appVersion,
 		Error:      err,
-		SystemInfo: SystemInfo{
+		System: SystemInfo{
+			OS:           runtime.GOOS,
+			Arch:         runtime.GOARCH,
 			NumCPU:       runtime.NumCPU(),
-			GOOS:         runtime.GOOS,
-			GOARCH:       runtime.GOARCH,
 			GoVersion:    runtime.Version(),
 			NumGoroutine: runtime.NumGoroutine(),
 		},
+		Logs: r.readRecentLogs(50),
 	}
 
-	// Try to read recent logs
-	logFile := filepath.Join(r.logDir, "errors.log")
-	if logData, readErr := os.ReadFile(logFile); readErr == nil {
-		// Get last 5000 characters
-		lines := string(logData)
-		if len(lines) > 5000 {
-			lines = lines[len(lines)-5000:]
-		}
-		report.RecentLogs = []string{lines}
-	}
-
-	// Marshal to JSON
 	data, marshalErr := json.MarshalIndent(report, "", "  ")
 	if marshalErr != nil {
-		return fmt.Errorf("failed to marshal crash report: %w", marshalErr)
+		fmt.Fprintf(os.Stderr, "marshal crash report: %v\n", marshalErr)
+		return
 	}
 
-	// Save to file
-	filename := fmt.Sprintf("crash_%s.json", time.Now().Format("2006-01-02_15-04-05"))
-	crashFile := filepath.Join(r.crashDir, filename)
+	filename := fmt.Sprintf("crash_%s_%s.json",
+		time.Now().Format("2006-01-02_15-04-05"),
+		err.ID,
+	)
+	crashPath := filepath.Join(r.crashesDir(), filename)
 
-	return os.WriteFile(crashFile, data, 0644)
+	if writeErr := os.WriteFile(crashPath, data, 0644); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "write crash report: %v\n", writeErr)
+	}
 }
 
-// ClearOldCrashReports removes crash reports older than 30 days
-func (r *Reporter) ClearOldCrashReports() error {
-	entries, err := os.ReadDir(r.crashDir)
+func (r *Reporter) readRecentLogs(maxLines int) []LogEntry {
+	logPath := filepath.Join(r.logsDir(), "errors.log")
+	data, err := os.ReadFile(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil
 	}
 
-	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
+	if len(data) > 10000 {
+		data = data[len(data)-10000:]
+	}
+
+	return nil
+}
+
+func (r *Reporter) cleanupOldReports(maxAge time.Duration) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	r.performCleanup(maxAge)
+
+	for range ticker.C {
+		r.performCleanup(maxAge)
+	}
+}
+
+func (r *Reporter) performCleanup(maxAge time.Duration) {
+	entries, err := os.ReadDir(r.crashesDir())
+	if err != nil {
+		return
+	}
+
+	cutoff := time.Now().Add(-maxAge)
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -170,16 +202,66 @@ func (r *Reporter) ClearOldCrashReports() error {
 			continue
 		}
 
-		if info.ModTime().Before(thirtyDaysAgo) {
-			filePath := filepath.Join(r.crashDir, entry.Name())
-			_ = os.Remove(filePath)
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(r.crashesDir(), entry.Name()))
 		}
 	}
-
-	return nil
 }
 
-// Cleanup performs cleanup operations
-func (r *Reporter) Cleanup() {
-	// Any cleanup needed before shutdown
+func (r *Reporter) GetCrashReports() ([]CrashReport, error) {
+	entries, err := os.ReadDir(r.crashesDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []CrashReport{}, nil
+		}
+		return nil, err
+	}
+
+	reports := make([]CrashReport, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(r.crashesDir(), entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		var report CrashReport
+		if err := json.Unmarshal(data, &report); err != nil {
+			continue
+		}
+
+		reports = append(reports, report)
+	}
+
+	return reports, nil
+}
+
+func (r *Reporter) GetLogs() (string, error) {
+	logPath := filepath.Join(r.logsDir(), "errors.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+func severityString(s hyerrors.Severity) string {
+	switch s {
+	case hyerrors.SeverityInfo:
+		return "INFO"
+	case hyerrors.SeverityWarning:
+		return "WARN"
+	case hyerrors.SeverityError:
+		return "ERROR"
+	case hyerrors.SeverityCritical:
+		return "CRITICAL"
+	default:
+		return "UNKNOWN"
+	}
 }

@@ -1,12 +1,12 @@
+// internal/app/app.go
 package app
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"HyLauncher/internal/config"
+	"HyLauncher/internal/diagnostics"
 	"HyLauncher/internal/env"
 	"HyLauncher/internal/progress"
 	"HyLauncher/internal/service"
@@ -18,18 +18,17 @@ import (
 var AppVersion string = config.Default().Version
 
 type App struct {
-	ctx      context.Context
-	cfg      *config.Config
-	progress *progress.Reporter
-	branch   string
-
-	gameSvc *service.GameService
+	ctx         context.Context
+	cfg         *config.Config
+	progress    *progress.Reporter
+	diagnostics *diagnostics.Reporter
+	branch      string
+	gameSvc     *service.GameService
 }
 
 func NewApp() *App {
-	cfg := config.New()
 	return &App{
-		cfg: cfg,
+		cfg: config.New(),
 	}
 }
 
@@ -37,103 +36,82 @@ func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.progress = progress.New(ctx)
 
-	a.gameSvc = service.NewGameService(
-		ctx,
-		a.progress,
+	reporter, err := diagnostics.NewReporter(
+		env.GetDefaultAppDir(),
+		AppVersion,
 	)
+	if err != nil {
+		fmt.Printf("failed to initialize diagnostics: %v\n", err)
+	}
+	a.diagnostics = reporter
+
+	hyerrors.RegisterHandlerFunc(func(err *hyerrors.Error) {
+		runtime.EventsEmit(ctx, "error", err)
+	})
+
+	a.gameSvc = service.NewGameService(ctx, a.progress)
 
 	branch, err := config.GetBranch()
 	if err != nil {
-		fmt.Printf("Game version grabbed: %s\n", err)
+		hyerrors.WrapConfig(err, "failed to get branch").
+			WithContext("default_branch", "stable")
+		branch = "stable"
 	}
-
 	a.branch = branch
 
-	fmt.Println("Application starting up...")
-	fmt.Printf("Current launcher version: %s\n", AppVersion)
-	fmt.Printf("Game version picker: %s\n", branch)
+	fmt.Printf("Application starting: v%s, branch=%s\n", AppVersion, branch)
 
-	go func() {
-		fmt.Println("Creating folders...")
-		env.CreateFolders(branch)
-	}()
-
-	// Check for launcher updates in background
-	go func() {
-		fmt.Println("Starting background update check...")
-		a.checkUpdateSilently()
-	}()
-
-	go func() {
-		fmt.Println("Starting cleanup")
-		env.CleanupLauncher(branch)
-	}()
-}
-
-// handleError creates an AppError, emits it to frontend, and returns it
-func (a *App) handleError(errType hyerrors.ErrorType, userMsg string, err error) error {
-	appErr := hyerrors.NewAppError(errType, userMsg, err)
-	a.emitError(appErr)
-	return appErr
-}
-
-// emitError sends structured errors to frontend
-func (a *App) emitError(err error) {
-	if appErr, ok := err.(*hyerrors.AppError); ok {
-		runtime.EventsEmit(a.ctx, "error", appErr)
-	} else {
-		runtime.EventsEmit(a.ctx, "error", hyerrors.NewAppError(
-			hyerrors.ErrorTypeUnknown,
-			err.Error(),
-			err,
-		))
-	}
+	go env.CreateFolders(branch)
+	go a.checkUpdateSilently()
+	go env.CleanupLauncher(branch)
 }
 
 func (a *App) DownloadAndLaunch(playerName string) error {
-	// Validate nickname
-	if len(playerName) == 0 {
-		return a.handleError(
-			hyerrors.ErrorTypeValidation,
-			"Please enter a nickname",
-			nil,
-		)
+	if err := a.validatePlayerName(playerName); err != nil {
+		hyerrors.Report(hyerrors.Validation("provided invalid username"))
+		return err
 	}
 
-	if len(playerName) > 16 {
-		return a.handleError(
-			hyerrors.ErrorTypeValidation,
-			"Nickname is too long (max 16 characters)",
-			nil,
-		)
-	}
-
-	// Ensure game is installed
 	if err := a.gameSvc.EnsureInstalled(a.ctx, a.branch, a.progress); err != nil {
-		return a.handleError(
-			hyerrors.ErrorTypeGame,
-			"Failed to install or update game",
-			err,
-		)
+		appErr := hyerrors.WrapGame(err, "failed to install game").
+			WithContext("branch", a.branch)
+		hyerrors.Report(appErr)
+		return appErr
 	}
 
-	// Launch the game
 	if err := a.gameSvc.Launch(playerName, a.branch); err != nil {
-		return a.handleError(
-			hyerrors.ErrorTypeGame,
-			"Failed to launch game",
-			err,
-		)
+		appErr := hyerrors.GameCritical("failed to launch game").
+			WithDetails(err.Error()).
+			WithContext("player", playerName).
+			WithContext("branch", a.branch)
+		hyerrors.Report(appErr)
+		return appErr
 	}
 
 	return nil
 }
 
-func (a *App) GetLogs() (string, error) {
-	logFile := filepath.Join(env.GetDefaultAppDir(), "logs", "errors.log")
-	data, err := os.ReadFile(logFile)
-	if err != nil {
-		return "", err
+func (a *App) validatePlayerName(name string) error {
+	if len(name) == 0 {
+		return hyerrors.Validation("please enter a nickname")
 	}
-	return string(data), nil
+	if len(name) > 16 {
+		return hyerrors.Validation("nickname too long (max 16 characters)").
+			WithContext("length", len(name))
+	}
+	return nil
+}
+
+func (a *App) GetLogs() (string, error) {
+	if a.diagnostics == nil {
+		return "", fmt.Errorf("diagnostics not initialized")
+	}
+	return a.diagnostics.GetLogs()
+}
+
+func (a *App) GetCrashReports() ([]diagnostics.CrashReport, error) {
+	if a.diagnostics == nil {
+		return nil, fmt.Errorf("diagnostics not initialized")
+	}
+	return a.diagnostics.GetCrashReports()
 }
