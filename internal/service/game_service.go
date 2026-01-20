@@ -1,13 +1,6 @@
 package service
 
 import (
-	"HyLauncher/internal/config"
-	"HyLauncher/internal/env"
-	"HyLauncher/internal/game"
-	"HyLauncher/internal/java"
-	"HyLauncher/internal/patch"
-	"HyLauncher/internal/progress"
-	"HyLauncher/pkg/fileutil"
 	"context"
 	"fmt"
 	"os"
@@ -15,6 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"HyLauncher/internal/config"
+	"HyLauncher/internal/env"
+	"HyLauncher/internal/game"
+	"HyLauncher/internal/java"
+	"HyLauncher/internal/patch"
+	"HyLauncher/internal/progress"
+	"HyLauncher/pkg/fileutil"
 )
 
 var (
@@ -28,10 +29,7 @@ type GameService struct {
 }
 
 func NewGameService(ctx context.Context, reporter *progress.Reporter) *GameService {
-	return &GameService{
-		ctx:      ctx,
-		reporter: reporter,
-	}
+	return &GameService{ctx: ctx, reporter: reporter}
 }
 
 func (s *GameService) VerifyGame(branch string) error {
@@ -81,13 +79,11 @@ func (s *GameService) EnsureInstalled(ctx context.Context, branch string, report
 		return nil
 	}
 
-	// Find latest version
 	latestVersion, err := s.fetchLatestVersion(ctx, branch)
 	if err != nil {
 		return err
 	}
 
-	// Ensure dependencies
 	if err := java.EnsureJRE(ctx, branch, reporter); err != nil {
 		return fmt.Errorf("install jre: %w", err)
 	}
@@ -100,8 +96,6 @@ func (s *GameService) EnsureInstalled(ctx context.Context, branch string, report
 		reporter.Report(progress.StageVerify, 100, "Checking complete")
 		reporter.Report(progress.StageComplete, 0, fmt.Sprintf("Found version %d", latestVersion))
 	}
-
-	fmt.Printf("Found latest version: %d\n", latestVersion)
 
 	return s.Install(ctx, branch, latestVersion, reporter)
 }
@@ -136,19 +130,24 @@ func (s *GameService) Install(ctx context.Context, branch string, latestVersion 
 	}
 
 	gameLatestDir := filepath.Join(env.GetDefaultAppDir(), branch, "package", "game", "latest")
-	clientPath, clientErr := fileutil.GetNativeFile(fileutil.GetClientPath(gameLatestDir))
+	clientPath := fileutil.GetClientPath(gameLatestDir)
 
-	// Check if game is already up to date
-	if local == latestVersion && clientErr == nil {
+	clientExists := false
+	if runtime.GOOS == "darwin" {
+		clientExists = fileutil.FileExists(filepath.Join(gameLatestDir, "Client", "Hytale.app"))
+	} else {
+		clientExists = fileutil.FileExists(clientPath)
+	}
+
+	if local == latestVersion && clientExists {
 		if reporter != nil {
 			reporter.Report(progress.StageComplete, 100, "Game is up to date")
 		}
 		return nil
 	}
 
-	// Check if this is a fresh install or update
 	prevVer := local
-	if clientErr != nil {
+	if !clientExists {
 		prevVer = 0
 		if reporter != nil {
 			reporter.Report(progress.StagePWR, 0, fmt.Sprintf("Installing game version %d...", latestVersion))
@@ -159,20 +158,11 @@ func (s *GameService) Install(ctx context.Context, branch string, latestVersion 
 		}
 	}
 
-	// Download patch
 	pwrPath, err := patch.DownloadPWR(ctx, branch, prevVer, latestVersion, reporter)
 	if err != nil {
 		return fmt.Errorf("download patch: %w", err)
 	}
 
-	// Verify patch file
-	info, err := os.Stat(pwrPath)
-	if err != nil {
-		return fmt.Errorf("verify patch file: %w", err)
-	}
-	fmt.Printf("Patch file size: %d bytes\n", info.Size())
-
-	// Apply patch
 	if reporter != nil {
 		reporter.Report(progress.StagePatch, 0, "Applying game patch...")
 	}
@@ -181,17 +171,20 @@ func (s *GameService) Install(ctx context.Context, branch string, latestVersion 
 		return fmt.Errorf("apply patch: %w", err)
 	}
 
-	// Verify installation
-	if !fileutil.FileExists(clientPath) {
-		return fmt.Errorf("client executable not found at %s", clientPath)
+	if runtime.GOOS == "darwin" {
+		if !fileutil.FileExists(filepath.Join(gameLatestDir, "Client", "Hytale.app")) {
+			return fmt.Errorf("client app not found")
+		}
+	} else {
+		if !fileutil.FileExists(clientPath) {
+			return fmt.Errorf("client executable not found")
+		}
 	}
 
-	// Save new version
 	if err := config.SaveLocalGameVersion(latestVersion); err != nil {
 		fmt.Printf("Warning: failed to save version info: %v\n", err)
 	}
 
-	// Apply online fix on Windows
 	if runtime.GOOS == "windows" {
 		if reporter != nil {
 			reporter.Report(progress.StageOnlineFix, 0, "Applying online fix...")
@@ -222,7 +215,6 @@ func (s *GameService) Launch(playerName, branch string) error {
 		return fmt.Errorf("apply game fixes: %w", err)
 	}
 
-	// Get client executable path
 	clientPath := fileutil.GetClientPath(gameDir)
 	javaBin, err := java.GetJavaExec(branch)
 	if err != nil {
@@ -258,9 +250,6 @@ func (s *GameService) Launch(playerName, branch string) error {
 	cmd.Stderr = os.Stderr
 
 	game.SetSDLVideoDriver(cmd)
-
-	fmt.Printf("Launching %s (latest) with UUID %s\n", playerName, playerUUID)
-	fmt.Printf("Launching command: %s\n", cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start game process: %w", err)

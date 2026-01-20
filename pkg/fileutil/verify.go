@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 )
 
 func VerifySHA256(filePath, expected string) error {
@@ -59,4 +61,13 @@ func GetNativeFile(filePath string) (string, error) {
 		return "", fmt.Errorf("Could not find file: %s", filePath)
 	}
 	return filePath, nil
+}
+
+func GetClientPath(gameDir string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(gameDir, "Client", "Hytale.app", "Contents", "MacOS", "HytaleClient")
+	} else if runtime.GOOS == "windows" {
+		return filepath.Join(gameDir, "Client", "HytaleClient.exe")
+	}
+	return filepath.Join(gameDir, "Client", "HytaleClient")
 }
