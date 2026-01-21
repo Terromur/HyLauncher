@@ -7,7 +7,7 @@ import { ControlSection } from './components/ControlSection';
 import { DeleteConfirmationModal } from './components/DeleteConfirmationModal';
 import { ErrorModal } from './components/ErrorModal';
 
-import { DownloadAndLaunch, OpenFolder, GetNick, SetNick, DeleteGame, Update, GetLocalGameVersion } from '../wailsjs/go/app/App';
+import { DownloadAndLaunch, OpenFolder, GetNick, SetNick, DeleteGame, Update, GetLocalGameVersion, GetLauncherVersion } from '../wailsjs/go/app/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 // TODO FULL REFACTOR + Redesign
@@ -15,6 +15,7 @@ import { EventsOn } from '../wailsjs/runtime/runtime';
 const App: React.FC = () => {
   const [username, setUsername] = useState<string>("HyLauncher");
   const [current, setCurrent] = useState<number>(0);
+  const [launcherVersion, setLauncherVersion] = useState<string>("0.0.0");
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   const [status, setStatus] = useState<string>("Ready to play");
@@ -35,39 +36,53 @@ const App: React.FC = () => {
 
   useEffect(() => {
     GetNick().then((n: string) => n && setUsername(n));
-
     GetLocalGameVersion().then((curr: number) => setCurrent(curr));
+    GetLauncherVersion().then((version: string) => setLauncherVersion(version));
 
-    EventsOn('update:available', (asset: any) => {
+    const offUpdateAvailable = EventsOn('update:available', (asset: any) => {
       console.log('Update available event received:', asset);
       setUpdateAsset(asset);
     });
-    
-    EventsOn('update:progress', (d: number, t: number) => {
-        console.log(`Update progress: ${d}/${t} bytes`);
-        const percentage = t > 0 ? (d/t)*100 : 0;
-        setProgress(percentage);
-        setUpdateStats({ d, t });
+
+    const offUpdateProgress = EventsOn('update:progress', (d: number, t: number) => {
+      const percentage = t > 0 ? (d / t) * 100 : 0;
+      setProgress(percentage);
+      setUpdateStats({ d, t });
     });
 
-    EventsOn('progress-update', (data: any) => {
-      setProgress(data.progress);
-      setStatus(data.message);
-      setCurrentFile(data.currentFile || "");
-      setDownloadSpeed(data.speed || "");
-      setDownloaded(data.downloaded || 0);
-      setTotal(data.total || 0);
+    const offProgress = EventsOn('progress-update', (data: any) => {
+      setProgress(data.progress ?? 0);
+      setStatus(data.message ?? "");
+      setCurrentFile(data.currentFile ?? "");
+      setDownloadSpeed(data.speed ?? "");
+      setDownloaded(data.downloaded ?? 0);
+      setTotal(data.total ?? 0);
 
-      if (data.progress >= 100 && data.stage === 'launch') {
-        setTimeout(() => { 
-            setIsDownloading(false); 
-            setProgress(0); 
-            setStatus("Ready to play"); 
-            setDownloadSpeed("");
-        }, 2000);
+      if (data.stage === 'launch') {
+        setIsDownloading(false);
+        setProgress(0);
+        setStatus("Ready to play");
+        setDownloadSpeed("");
+      }
+
+      if (data.stage === 'idle') {
+        setIsDownloading(false);
+        setProgress(0);
+        setStatus("Ready to play");
+        setCurrentFile("");
+        setDownloadSpeed("");
+        setDownloaded(0);
+        setTotal(0);
       }
     });
+
+    return () => {
+      offUpdateAvailable();
+      offUpdateProgress();
+      offProgress();
+    };
   }, []);
+
 
   const handleUpdate = async () => {
     console.log('Update button clicked, starting update...');
@@ -110,7 +125,7 @@ const App: React.FC = () => {
           />
 
           <div className="w-[532px] h-[120px] bg-[#090909]/[0.55] backdrop-blur-xl rounded-[14px] border border-[#FFA845]/[0.10] p-4">
-             <h3 className="text-sm font-bold text-gray-200">Latest News</h3>
+            <div>{launcherVersion}</div>
           </div>
         </div>
 

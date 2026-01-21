@@ -18,14 +18,11 @@ import (
 	"HyLauncher/pkg/fileutil"
 )
 
-var (
-	installMutex sync.Mutex
-	isInstalling bool
-)
-
 type GameService struct {
 	ctx      context.Context
 	reporter *progress.Reporter
+
+	installMutex sync.Mutex
 }
 
 func NewGameService(ctx context.Context, reporter *progress.Reporter) *GameService {
@@ -52,24 +49,20 @@ func (s *GameService) VerifyGame(branch string) error {
 	}
 
 	s.reporter.Report(progress.StageVerify, 100, "Hytale is installed...")
-	s.reporter.Report(progress.StageComplete, 0, "Launcher completed checking, everything is installed")
 	return nil
 }
 
 func (s *GameService) EnsureInstalled(ctx context.Context, branch string, reporter *progress.Reporter) error {
-	installMutex.Lock()
-	if isInstalling {
-		installMutex.Unlock()
-		return fmt.Errorf("installation already in progress")
-	}
-	isInstalling = true
-	installMutex.Unlock()
+	s.installMutex.Lock()
+	defer s.installMutex.Unlock()
 
-	defer func() {
-		installMutex.Lock()
-		isInstalling = false
-		installMutex.Unlock()
-	}()
+	if reporter != nil {
+		reporter.Report(progress.StageVerify, 0, "Checking for game updates")
+	}
+
+	if s.VerifyGame(branch) == nil {
+		return nil
+	}
 
 	if reporter != nil {
 		reporter.Report(progress.StageVerify, 0, "Checking for game updates")
@@ -207,6 +200,11 @@ func (s *GameService) Install(ctx context.Context, branch string, latestVersion 
 }
 
 func (s *GameService) Launch(playerName, branch string) error {
+	if s.reporter != nil {
+		s.reporter.Reset()
+		s.reporter.Report(progress.StageLaunch, 0, "Launching game...")
+	}
+
 	baseDir := env.GetDefaultAppDir()
 	gameDir := filepath.Join(baseDir, branch, "package", "game", "latest")
 	userDataDir := filepath.Join(baseDir, "UserData")

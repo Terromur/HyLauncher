@@ -70,6 +70,18 @@ func (p *Reporter) ReportWithFile(stage Stage, progress float64, message string,
 	})
 }
 
+func (p *Reporter) Reset() {
+	if p == nil || p.ctx == nil {
+		return
+	}
+
+	runtime.EventsEmit(p.ctx, "progress-update", Data{
+		Stage:    StageIdle,
+		Progress: 0,
+		Message:  "",
+	})
+}
+
 // ReportDownload sends a progress update with download metrics
 func (p *Reporter) ReportDownload(stage Stage, progress float64, message string, currentFile string, speed string, downloaded, total int64) {
 	if p == nil || p.ctx == nil {

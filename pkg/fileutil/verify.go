@@ -2,6 +2,7 @@ package fileutil
 
 import (
 	"HyLauncher/internal/env"
+	"HyLauncher/internal/platform"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -46,6 +47,7 @@ func FileExistsNative(filePath string) bool {
 
 func FileFunctional(filePath string) bool {
 	cmd := exec.Command(filePath, "--version")
+	platform.HideConsoleWindow(cmd)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Run() == nil
