@@ -53,6 +53,15 @@ func NewReporter(rootDir, appVersion string) (*Reporter, error) {
 		return nil, err
 	}
 
+	path := filepath.Join(rootDir, "logs", "errors.log")
+
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+
 	hyerrors.RegisterHandlerFunc(r.handleError)
 
 	go r.cleanupOldReports(30 * 24 * time.Hour)
