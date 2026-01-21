@@ -46,7 +46,7 @@ func ApplyOnlineFixWindows(ctx context.Context, gameDir string, reporter *progre
 		return fmt.Errorf("online fix is only supported on Windows")
 	}
 
-	cacheDir := filepath.Join(gameDir, ".cache", "onlinefix")
+	cacheDir := filepath.Join(env.GetCacheDir(), "onlinefix")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
@@ -59,7 +59,7 @@ func ApplyOnlineFixWindows(ctx context.Context, gameDir string, reporter *progre
 		return fmt.Errorf("failed to fetch magnet link: %w", err)
 	}
 
-	reporter.Report(progress.StageOnlineFix, 5, "Starting torrent download...")
+	reporter.Report(progress.StageOnlineFix, 5, "Starting selective download...")
 
 	fixArchivePath := filepath.Join(cacheDir, fixArchiveName)
 	if err := downloadFixArchive(ctx, magnetLink, fixArchivePath, reporter); err != nil {
@@ -149,7 +149,7 @@ func downloadFixArchive(ctx context.Context, magnetLink, destPath string, report
 		return fmt.Errorf("fix archive not found in torrent")
 	}
 
-	t.DownloadAll()
+	targetFile.Download()
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -157,32 +157,53 @@ func downloadFixArchive(ctx context.Context, magnetLink, destPath string, report
 	timeoutCtx, cancel := context.WithTimeout(ctx, torrentTimeout)
 	defer cancel()
 
-	for {
+	completed := false
+	for !completed {
 		select {
 		case <-timeoutCtx.Done():
 			return fmt.Errorf("torrent download timeout")
 		case <-ticker.C:
-			stats := t.Stats()
+			bytesCompleted := targetFile.BytesCompleted()
 			totalBytes := targetFile.Length()
-			downloadedBytes := stats.BytesRead.Int64()
 
-			if downloadedBytes >= totalBytes {
-				sourcePath := filepath.Join(cfg.DataDir, targetFile.Path())
-				if err := fileutil.CopyFile(sourcePath, destPath); err != nil {
-					return err
-				}
-				return nil
+			if bytesCompleted >= totalBytes {
+				completed = true
+				break
 			}
 
 			progressPct := 0.0
 			if totalBytes > 0 {
-				progressPct = float64(downloadedBytes) / float64(totalBytes) * 100
+				progressPct = float64(bytesCompleted) / float64(totalBytes) * 100
 			}
 
 			scaledProgress := 5 + (progressPct * 0.75)
 			reporter.Report(progress.StageOnlineFix, scaledProgress, "Downloading fix...")
 		}
 	}
+
+	reporter.Report(progress.StageOnlineFix, 78, "Finalizing download...")
+
+	t.Drop()
+	client.Close()
+	time.Sleep(2 * time.Second)
+
+	sourcePath := filepath.Join(cfg.DataDir, targetFile.Path())
+	partPath := sourcePath + ".part"
+
+	var finalSource string
+	if _, err := os.Stat(sourcePath); err == nil {
+		finalSource = sourcePath
+	} else if _, err := os.Stat(partPath); err == nil {
+		finalSource = partPath
+	} else {
+		return fmt.Errorf("downloaded file not found at %s or %s", sourcePath, partPath)
+	}
+
+	if err := fileutil.CopyFile(finalSource, destPath); err != nil {
+		return fmt.Errorf("failed to copy file: %w", err)
+	}
+
+	return nil
 }
 
 func extractAndApply(archivePath, gameDir string) error {

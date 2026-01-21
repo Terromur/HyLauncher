@@ -2,21 +2,21 @@ name: Wails Build Windows & Linux
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.github/**'
-      - 'docs/**'
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".github/**"
+      - "docs/**"
 
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - 'docs/**'
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - "docs/**"
 
   workflow_dispatch:
 
@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: "1.24"
           cache: true
 
       - uses: actions/setup-node@v4
@@ -72,7 +72,10 @@ jobs:
           fi
 
       - name: Build Wails app
-        run: wails build -platform ${{ matrix.platform }}
+        env:
+          CGO_ENABLED: 0
+        run: |
+          wails build -platform ${{ matrix.platform }}
 
       - uses: actions/upload-artifact@v4
         with:

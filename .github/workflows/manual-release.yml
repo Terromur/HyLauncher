@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # needed for tags & changelog
+          fetch-depth: 0 # needed for tags & changelog
 
       - uses: actions/setup-go@v5
         with:
@@ -47,12 +47,21 @@ jobs:
 
       - name: Build HyLauncher
         run: |
-          wails build -platform linux/amd64
-          wails build -platform windows/amd64 -nsis
+          mkdir -p release
 
+          # Linux portable
+          wails build -platform linux/amd64
           cp build/bin/HyLauncher release/HyLauncher-linux-x64
-          cp build/bin/HyLauncher-Setup.exe release/HyLauncher-Setup-windows-x64.exe
           chmod +x release/HyLauncher-linux-x64
+
+          # Portable windows
+          CGO_ENABLED=0 wails build -platform windows/amd64
+          cp build/bin/HyLauncher.exe release/HyLauncher-windows-x64-portable.exe
+
+          # NSIS Installer
+          CGO_ENABLED=0 wails build -platform windows/amd64 -nsis
+          cp build/bin/HyLauncher-amd64-installer.exe \
+             release/HyLauncher-setup-windows-x64.exe
 
       - name: Generate version.json
         run: |
@@ -61,7 +70,7 @@ jobs:
           LINUX_LAUNCHER_SHA=$(sha256sum release/HyLauncher-linux-x64 | cut -d' ' -f1)
           LINUX_HELPER_SHA=$(sha256sum release/update-helper-linux | cut -d' ' -f1)
 
-          WINDOWS_LAUNCHER_SHA=$(sha256sum release/HyLauncher-Setup-windows-x64.exe | cut -d' ' -f1)
+          WINDOWS_LAUNCHER_SHA=$(sha256sum release/HyLauncher-windows-x64-portable.exe | cut -d' ' -f1)
           WINDOWS_HELPER_SHA=$(sha256sum release/update-helper-windows.exe | cut -d' ' -f1)
 
           cat <<EOF > release/version.json
@@ -82,7 +91,7 @@ jobs:
             "windows": {
               "amd64": {
                 "launcher": {
-                  "url": "https://github.com/${{ github.repository }}/releases/download/v$VERSION/HyLauncher-Setup-windows-x64.exe",
+                  "url": "https://github.com/${{ github.repository }}/releases/download/v$VERSION/HyLauncher-windows-x64-portable.exe",
                   "sha256": "$WINDOWS_LAUNCHER_SHA"
                 },
                 "helper": {
@@ -115,7 +124,6 @@ jobs:
           body_path: changelog.txt
           files: |
             release/*
-
 
   cleanup:
     name: Cleanup old artifacts

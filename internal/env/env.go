@@ -53,9 +53,10 @@ func CreateFolders(branch string) error {
 	packagePath := filepath.Join(basePath, branch, "package") // Package folder
 
 	paths := []string{
-		basePath,                                   // main folder
+		basePath,                                   // Main folder
 		filepath.Join(basePath, "UserData"),        // UserData
-		filepath.Join(basePath, "cache"),           // cache Folder
+		filepath.Join(basePath, "cache"),           // Cache Folder
+		filepath.Join(basePath, "logs"),            // Logs Folder
 		filepath.Join(basePath, "tools", "butler"), // Butler
 		filepath.Join(packagePath, "jre"),          // JRE Folder
 		filepath.Join(packagePath, "game"),
